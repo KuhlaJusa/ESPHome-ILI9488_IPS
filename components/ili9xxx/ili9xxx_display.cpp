@@ -38,17 +38,28 @@ void ILI9XXXDisplay::setup() {
   this->init_lcd_(this->extra_init_sequence_.data());
   switch (this->pixel_mode_) {
     case PIXEL_MODE_16:
-      if (this->is_18bitdisplay_) {
+      if (this->is_18bitdisplay_ || this->is_3bitdisplay_) {
         this->command(ILI9XXX_PIXFMT);
         this->data(0x55);
         this->is_18bitdisplay_ = false;
+        this->is_3bitdisplay_ = false;
       }
       break;
     case PIXEL_MODE_18:
-      if (!this->is_18bitdisplay_) {
+      if (!this->is_18bitdisplay_ || this->is_3bitdisplay_) {
         this->command(ILI9XXX_PIXFMT);
         this->data(0x66);
         this->is_18bitdisplay_ = true;
+        this->is_3bitdisplay_ = false;
+      }
+      break;
+    case PIXEL_MODE_3:
+      if (!this->is_18bitdisplay_ || !this->is_3bitdisplay_) {
+        this->command(ILI9XXX_PIXFMT);
+        this->data(0x51); // RGB interface to 16bits as it does not support 3 bits
+                          // MCU interface to 3 bits.
+        this->is_18bitdisplay_ = false;
+        this->is_3bitdisplay_ = true;
       }
       break;
     default:
@@ -66,6 +77,8 @@ void ILI9XXXDisplay::setup() {
 void ILI9XXXDisplay::alloc_buffer_() {
   if (this->buffer_color_mode_ == BITS_16) {
     this->init_internal_(this->get_buffer_length_() * 2);
+  } else if (this->buffer_color_mode_ == BITS_3){
+    this->init_internal_(this->get_buffer_length_() >> 1);
   } else {
     this->init_internal_(this->get_buffer_length_());
   }
@@ -105,6 +118,9 @@ void ILI9XXXDisplay::dump_config() {
   if (this->is_18bitdisplay_) {
     ESP_LOGCONFIG(TAG, "  18-Bit Mode: YES");
   }
+  if (this->is_3bitdisplay_) {
+    ESP_LOGCONFIG(TAG, "  3-Bit Mode: YES");
+  }
   ESP_LOGCONFIG(TAG, "  Data rate: %dMHz", (unsigned) (this->data_rate_ / 1000000));
 
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
@@ -134,6 +150,14 @@ void ILI9XXXDisplay::fill(Color color) {
   this->x_high_ = this->get_width_internal() - 1;
   this->y_high_ = this->get_height_internal() - 1;
   switch (this->buffer_color_mode_) {
+    case BITS_3: {
+      uint8_t color3 = ((color.r >> 5) & 0x04) | ((color.g >> 6) & 0x02) | ((color.b >> 7) & 0x01);
+      uint8_t packed = (color3 << 3) | color3; // Fill both 3-bit slots in byte;
+
+      const uint32_t buffer_length_3_bits = this->get_buffer_length_() >> 1;
+      memset(this->buffer_, packed, buffer_length_3_bits);
+      }
+      return;
     case BITS_8_INDEXED:
       new_color = display::ColorUtil::color_to_index8_palette888(color, this->palette_);
       break;
@@ -166,12 +190,41 @@ void HOT ILI9XXXDisplay::draw_absolute_pixel_internal(int x, int y, Color color)
   if (!this->check_buffer_())
     return;
   uint32_t pos = (y * width_) + x;
-  uint16_t new_color;
+  uint16_t new_color = 0;
   bool updated = false;
+  bool parity;
   switch (this->buffer_color_mode_) {
     case BITS_8_INDEXED:
       new_color = display::ColorUtil::color_to_index8_palette888(color, this->palette_);
       break;
+    case BITS_3:
+      parity = pos & 1;
+      pos >>= 1;
+      new_color = ((color.r >> 5) & 4) | ((color.g >> 6) & 2) | (color.b >> 7);
+      if (!parity) {
+          // Clear upper 3 bits, set upper bits to color
+          new_color = (this->buffer_[pos] & 0x07) | (new_color << 3);
+      } else {
+          // Clear lower 3 bits, set lower bits to color
+          new_color = (this->buffer_[pos] & 0x38) | new_color;
+      }
+
+      if (this->buffer_[pos] != (uint8_t) (new_color)) {
+        this->buffer_[pos] = (uint8_t) (new_color);
+        updated = true;
+      }
+      if (updated) {
+        // low and high watermark may speed up drawing from buffer
+        if (x < this->x_low_)
+          this->x_low_ = x;
+        if (y < this->y_low_)
+          this->y_low_ = y;
+        if (x > this->x_high_)
+          this->x_high_ = x;
+        if (y > this->y_high_)
+          this->y_high_ = y;
+      }
+      return;
     case BITS_16:
       pos = pos * 2;
       new_color = display::ColorUtil::color_to_565(color, display::ColorOrder::COLOR_ORDER_RGB);
@@ -235,16 +288,23 @@ void ILI9XXXDisplay::display_() {
   size_t mw_time = (w * h * 16) / mhz + w * h * 2 / ILI9XXX_TRANSFER_BUFFER_SIZE * SPI_SETUP_US;
   ESP_LOGV(TAG,
            "Start display(xlow:%d, ylow:%d, xhigh:%d, yhigh:%d, width:%d, "
-           "height:%zu, mode=%d, 18bit=%d, sw_time=%zuus, mw_time=%zuus)",
+           "height:%zu, mode=%d, 18bit=%d, 3bit=%d,sw_time=%zuus, mw_time=%zuus)",
            this->x_low_, this->y_low_, this->x_high_, this->y_high_, w, h, this->buffer_color_mode_,
-           this->is_18bitdisplay_, sw_time, mw_time);
+           this->is_18bitdisplay_, this->is_3bitdisplay_,sw_time, mw_time);
   auto now = millis();
-  if (this->buffer_color_mode_ == BITS_16 && !this->is_18bitdisplay_ && sw_time < mw_time) {
+  if (this->buffer_color_mode_ == BITS_16 && !this->is_18bitdisplay_ && !this->is_3bitdisplay_ && sw_time < mw_time) {
     // 16 bit mode maps directly to display format
-    ESP_LOGV(TAG, "Doing single write of %zu bytes", this->width_ * h * 2);
+    ESP_LOGV(TAG, "16bit mode, Doing single write of %zu bytes", this->width_ * h * 2);
     set_addr_window_(0, this->y_low_, this->width_ - 1, this->y_high_);
     this->write_array(this->buffer_ + this->y_low_ * this->width_ * 2, h * this->width_ * 2);
-  } else {
+  } 
+  else if (this->buffer_color_mode_ == BITS_3 && this->is_3bitdisplay_) {
+    // 3 bit mode maps directly to display format
+    ESP_LOGV(TAG, "3bit mode, Doing single write of %zu bytes", (this->width_ * h) >> 1);
+    set_addr_window_(0, this->y_low_, this->width_ - 1, this->y_high_);
+    this->write_array(this->buffer_ + ((this->y_low_ * this->width_) >> 1), (h * this->width_) >> 1);
+  } 
+  else if (!this->is_3bitdisplay_){
     ESP_LOGV(TAG, "Doing multiple write");
     uint8_t transfer_buffer[ILI9XXX_TRANSFER_BUFFER_SIZE];
     size_t rem = h * w;  // remaining number of pixels to write
@@ -252,9 +312,66 @@ void ILI9XXXDisplay::display_() {
     size_t idx = 0;    // index into transfer_buffer
     size_t pixel = 0;  // pixel number offset
     size_t pos = this->y_low_ * this->width_ + this->x_low_;
+    bool start_parity = pos & 1;
+    bool parity;
+    while (rem-- > 0) {
+      rem--;
+      uint8_t color_val;
+      switch (this->buffer_color_mode_) {
+        case BITS_3:
+          // case with is_3bit_display_ false and BITS_3 true, should not be possible.
+          break;
+        case BITS_8:
+          color_val = this->buffer_[pos++];
+          color_val = display::ColorUtil::color_to_565(display::ColorUtil::rgb332_to_color(this->buffer_[pos++]));
+          break;
+        case BITS_8_INDEXED:
+          color_val = display::ColorUtil::color_to_565(
+              display::ColorUtil::index8_to_color_palette888(this->buffer_[pos++], this->palette_));
+          break;
+        default:  // case BITS_16:
+          color_val = (this->buffer_[pos * 2] << 8) + this->buffer_[pos * 2 + 1];
+          pos++;
+          break;
+      }
+      transfer_buffer[idx++] = color_val;
+      if (idx == sizeof(transfer_buffer)) {
+        this->write_array(transfer_buffer, idx);
+        idx = 0;
+        App.feed_wdt();
+      }
+      // end of line? Skip to the next.
+      if (++pixel == w) {
+        pixel = 0;
+        pos += this->width_ - w;
+      }
+    }
+    // flush any balance.
+    if (idx != 0) {
+      this->write_array(transfer_buffer, idx);
+    }
+  }
+  else {
+    ESP_LOGV(TAG, "Doing multiple write");
+    uint8_t transfer_buffer[ILI9XXX_TRANSFER_BUFFER_SIZE];
+    size_t rem = h * w;  // remaining number of pixels to write
+    set_addr_window_(this->x_low_, this->y_low_, this->x_high_, this->y_high_);
+    size_t idx = 0;    // index into transfer_buffer
+    size_t pixel = 0;  // pixel number offset
+    size_t pos = this->y_low_ * this->width_ + this->x_low_;
+    bool parity;
     while (rem-- != 0) {
       uint16_t color_val;
       switch (this->buffer_color_mode_) {
+        case BITS_3: {
+            parity = pos & 1;
+            uint8_t color3 = (this->buffer_[pos >> 1] >> (3 * !parity)) & 0x07;  // Extract 3-bit color
+            color_val = (((color3 >> 1) & 0x01) * 0xf800) | 
+                        (((color3 >> 1) & 0x01)  * 0x07e0) | 
+                        ((color3 & 1) * 0x001f);   
+            pos++;
+          }
+          break;
         case BITS_8:
           color_val = display::ColorUtil::color_to_565(display::ColorUtil::rgb332_to_color(this->buffer_[pos++]));
           break;
@@ -314,10 +431,11 @@ void ILI9XXXDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
                                      x_pad);
     return;
   }
+  ESP_LOGD(TAG, "Dont do draw pixels_at from display, bitness:%d", bitness);
   this->set_addr_window_(x_start, y_start, x_start + w - 1, y_start + h - 1);
   // x_ and y_offset are offsets into the source buffer, unrelated to our own offsets into the display.
   auto stride = x_offset + w + x_pad;
-  if (!this->is_18bitdisplay_) {
+  if (!this->is_18bitdisplay_ && !this->is_3bitdisplay_) {
     if (x_offset == 0 && x_pad == 0 && y_offset == 0) {
       // we could deal here with a non-zero y_offset, but if x_offset is zero, y_offset probably will be so don't bother
       this->write_array(ptr, w * h * 2);
@@ -326,7 +444,7 @@ void ILI9XXXDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
         this->write_array(ptr + (y + y_offset) * stride + x_offset, w * 2);
       }
     }
-  } else {
+  } else  if (this->is_18bitdisplay_){
     // 18 bit mode
     uint8_t transfer_buffer[ILI9XXX_TRANSFER_BUFFER_SIZE * 4];
     ESP_LOGV(TAG, "Doing multiple write");
@@ -355,6 +473,39 @@ void ILI9XXXDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
     if (idx != 0) {
       this->write_array(transfer_buffer, idx);
     }
+  }
+  else {
+  // needs changing
+
+  //   // 3 bit mode
+  //   uint8_t transfer_buffer[ILI9XXX_TRANSFER_BUFFER_SIZE * 4];
+  //   ESP_LOGV(TAG, "Doing multiple write 3 bits");
+  //   size_t rem = h * w;  // remaining number of pixels to write
+  //   size_t idx = 0;      // index into transfer_buffer
+  //   size_t pixel = 0;    // pixel number offset
+  //   ptr += (y_offset * stride + x_offset) >> 1;
+  //   while (rem-- > 0) {
+  //     rem--;
+  //     uint8_t hi_byte = *ptr++;
+  //     uint8_t lo_byte = *ptr++;
+  //     transfer_buffer[idx++] = hi_byte & 0xF8;                     // Blue
+  //     transfer_buffer[idx++] = ((hi_byte << 5) | (lo_byte) >> 5);  // Green
+  //     transfer_buffer[idx++] = lo_byte << 3;                       // Red
+  //     if (idx == sizeof(transfer_buffer)) {
+  //       this->write_array(transfer_buffer, idx);
+  //       idx = 0;
+  //       App.feed_wdt();
+  //     }
+  //     // end of line? Skip to the next.
+  //     if (++pixel == w) {
+  //       pixel = 0;
+  //       ptr += (x_pad + x_offset) * 2;
+  //     }
+  //   }
+  //   // flush any balance.
+  //   if (idx != 0) {
+  //     this->write_array(transfer_buffer, idx);
+  //   }
   }
   this->end_data_();
 }

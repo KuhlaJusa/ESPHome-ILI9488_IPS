@@ -12,6 +12,7 @@ static const char *const TAG = "ili9xxx";
 const size_t ILI9XXX_TRANSFER_BUFFER_SIZE = 126;  // ensure this is divisible by 6
 
 enum ILI9XXXColorMode {
+  BITS_3 = 0x03,
   BITS_8 = 0x08,
   BITS_8_INDEXED = 0x09,
   BITS_16 = 0x10,
@@ -21,6 +22,7 @@ enum PixelMode {
   PIXEL_MODE_UNSPECIFIED,
   PIXEL_MODE_16,
   PIXEL_MODE_18,
+  PIXEL_MODE_3,
 };
 
 class ILI9XXXDisplay : public display::DisplayBuffer,
@@ -50,6 +52,9 @@ class ILI9XXXDisplay : public display::DisplayBuffer,
           if ((bits & 0xF) == 6)
             this->is_18bitdisplay_ = true;
           break;
+          if ((bits & 0xF) == 1)
+            this->is_3bitdisplay_ = true;
+          break;
         }
 
         default:
@@ -64,7 +69,11 @@ class ILI9XXXDisplay : public display::DisplayBuffer,
   float get_setup_priority() const override;
   void set_reset_pin(GPIOPin *reset) { this->reset_pin_ = reset; }
   void set_palette(const uint8_t *palette) { this->palette_ = palette; }
-  void set_buffer_color_mode(ILI9XXXColorMode color_mode) { this->buffer_color_mode_ = color_mode; }
+  void set_buffer_color_mode(ILI9XXXColorMode color_mode) { this->buffer_color_mode_ = color_mode; 
+                                                            if (color_mode == BITS_3) {
+                                                              this->pixel_mode_ = PIXEL_MODE_3;
+                                                            }
+                                                          }
   void set_dimensions(int16_t width, int16_t height) {
     this->height_ = height;
     this->width_ = width;
@@ -145,6 +154,7 @@ class ILI9XXXDisplay : public display::DisplayBuffer,
   bool prossing_update_ = false;
   bool need_update_ = false;
   bool is_18bitdisplay_ = false;
+  bool is_3bitdisplay_ = false;
   PixelMode pixel_mode_{};
   bool pre_invertcolors_{};
   display::ColorOrder color_order_{display::COLOR_ORDER_BGR};
@@ -249,6 +259,11 @@ class WAVESHARERES35 : public ILI9XXXILI9488 {
 class ILI9XXXILI9488A : public ILI9XXXDisplay {
  public:
   ILI9XXXILI9488A() : ILI9XXXDisplay(INITCMD_ILI9488_A, 480, 320) {}
+};
+
+class ILI9XXXILI9488AIPS : public ILI9XXXDisplay {
+ public:
+  ILI9XXXILI9488AIPS() : ILI9XXXDisplay(INITCMD_ILI9488_A_IPS, 480, 320) {}
 };
 
 //-----------   ILI9XXX_35_TFT rotated display --------------

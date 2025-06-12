@@ -69,6 +69,7 @@ MODELS = {
     "ILI9486": ili9xxx_ns.class_("ILI9XXXILI9486", ILI9XXXDisplay),
     "ILI9488": ili9xxx_ns.class_("ILI9XXXILI9488", ILI9XXXDisplay),
     "ILI9488_A": ili9xxx_ns.class_("ILI9XXXILI9488A", ILI9XXXDisplay),
+    "ILI9488_A_IPS": ili9xxx_ns.class_("ILI9XXXILI9488AIPS", ILI9XXXDisplay),
     "ST7735": ili9xxx_ns.class_("ILI9XXXST7735", ILI9XXXDisplay),
     "ST7796": ili9xxx_ns.class_("ILI9XXXST7796", ILI9XXXDisplay),
     "ST7789V": ili9xxx_ns.class_("ILI9XXXST7789V", ILI9XXXDisplay),
@@ -83,7 +84,7 @@ COLOR_ORDERS = {
     "BGR": ColorOrder.COLOR_ORDER_BGR,
 }
 
-COLOR_PALETTE = cv.one_of("NONE", "GRAYSCALE", "IMAGE_ADAPTIVE", "8BIT", upper=True)
+COLOR_PALETTE = cv.one_of("NONE", "GRAYSCALE", "IMAGE_ADAPTIVE", "8BIT", "3BIT",upper=True)
 
 CONF_LED_PIN = "led_pin"
 CONF_COLOR_PALETTE_IMAGES = "color_palette_images"
@@ -302,6 +303,8 @@ async def to_code(config):
         rhs = palette
     elif config[CONF_COLOR_PALETTE] == "8BIT":
         cg.add(var.set_buffer_color_mode(ILI9XXXColorMode.BITS_8))
+    elif config[CONF_COLOR_PALETTE] == "3BIT":
+        cg.add(var.set_buffer_color_mode(ILI9XXXColorMode.BITS_3))
     else:
         cg.add(var.set_buffer_color_mode(ILI9XXXColorMode.BITS_16))
 

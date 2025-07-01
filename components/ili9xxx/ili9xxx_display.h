@@ -95,6 +95,7 @@ class ILI9XXXDisplay : public display::DisplayBuffer,
   void update() override;
 
   void fill(Color color) override;
+  void filled_rectangle_3bit(int x1, int y1, int width, int height, Color color);
 
   void dump_config() override;
   void setup() override;

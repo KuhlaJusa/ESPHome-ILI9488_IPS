@@ -183,6 +183,33 @@ void ILI9XXXDisplay::fill(Color color) {
   memset(this->buffer_, (uint8_t) new_color, this->get_buffer_length_());
 }
 
+
+void ILI9XXXDisplay::filled_rectangle_3bit(int x1, int y1, int width, int height, Color color) {
+  if (!this->check_buffer_())
+    return;
+  // this->x_low_ = x1;
+  // this->y_low_ = y1;
+  // this->x_high_ = x1+width-1;
+  // this->y_high_ = y1+height-1;  
+  this->x_low_ = 0;
+  this->y_low_ = 0;
+  this->x_high_ = this->get_width_internal() - 1;
+  this->y_high_ = this->get_height_internal() - 1;
+
+  uint8_t color3 = ((color.r >> 5) & 0x04) | ((color.g >> 6) & 0x02) | ((color.b >> 7) & 0x01);
+  uint8_t packed = (color3 << 3) | color3; // Fill both 3-bit slots in byte;
+
+  uint8_t width_bytes = width >> 1;  // 2 pixels per byte
+  uint8_t screen_width_bytes = this->get_width_internal() >> 1;
+
+  uint8_t* buffer = this->buffer_ + (y1 * screen_width_bytes) + (x1 >> 1);
+
+  for (uint16_t y = 0; y < height; y++) {
+    memset(buffer, packed, width_bytes);
+    buffer += screen_width_bytes;
+  }
+}
+
 void HOT ILI9XXXDisplay::draw_absolute_pixel_internal(int x, int y, Color color) {
   if (x >= this->get_width_internal() || x < 0 || y >= this->get_height_internal() || y < 0) {
     return;

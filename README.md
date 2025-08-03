@@ -1,2 +1,2 @@
 # ESPHome-ILI9488_IPS
-Added Support for 3-Bit mode for this Display
+new component based on ESPHome-ILI9488_IPS for a 3bit color mode

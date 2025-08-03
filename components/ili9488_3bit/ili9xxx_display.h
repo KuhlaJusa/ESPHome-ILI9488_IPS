@@ -95,9 +95,11 @@ class ILI9XXXDisplay : public display::DisplayBuffer,
   void update() override;
 
   void fill(Color color) override;
+  void filled_rectangle_3bit(int x1, int y1, int width, int height, Color color);
 
   void dump_config() override;
   void setup() override;
+  void resetup();
   void on_shutdown() override { this->command(ILI9XXX_SLPIN); }
 
   display::DisplayType get_display_type() override { return display::DisplayType::DISPLAY_TYPE_COLOR; }
@@ -151,6 +153,11 @@ class ILI9XXXDisplay : public display::DisplayBuffer,
   GPIOPin *dc_pin_{nullptr};
   GPIOPin *busy_pin_{nullptr};
 
+  uint32_t last_color = 0;
+  uint8_t color_packed = 0;
+  uint8_t color_packed_left = 0;
+  uint8_t color_packed_right = 0;
+  
   bool prossing_update_ = false;
   bool need_update_ = false;
   bool is_18bitdisplay_ = false;
